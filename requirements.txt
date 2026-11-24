@@ -1,2 +1,9 @@
-mediapipe==1.2.2
-opencv-contrib-python==5.0.0.93
+# No Raspberry Pi (aarch64) usa versoes antigas: o mediapipe 1.x exige
+# instrucoes AES que o processador do Pi 3 (e do Pi 4) nao tem.
+# A mediapipe 0.10.18 precisa de Python 3.12 ou mais antigo e de numpy < 2.
+mediapipe==0.10.18; platform_machine == "aarch64"
+opencv-contrib-python==4.10.0.84; platform_machine == "aarch64"
+
+# No PC
+mediapipe==1.2.2; platform_machine != "aarch64"
+opencv-contrib-python==5.0.0.93; platform_machine != "aarch64"

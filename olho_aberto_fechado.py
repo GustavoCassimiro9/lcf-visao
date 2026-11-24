@@ -14,12 +14,14 @@ Uso:
 Pressione 'q' ou ESC para sair.
 """
 import os
+import subprocess
 import sys
 import time
 import urllib.request
 
 import cv2
 import mediapipe as mp
+import numpy as np
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision
 
@@ -49,6 +51,36 @@ LARGURA_CAPTURA, ALTURA_CAPTURA = 640, 480
 # computadores fracos (como o Raspberry Pi 3). A tela continua em 640x480.
 # Se o rosto nao for detectado de longe, aumente (ou use 640 para nao reduzir).
 LARGURA_DETECCAO = 320
+
+
+class CameraRpicam:
+    """Le a camera CSI pelo programa rpicam-vid, sem precisar da Picamera2.
+
+    Usado quando a Picamera2 nao esta disponivel (por exemplo, num ambiente
+    com uma versao de Python diferente da do sistema). Funciona como o
+    cv2.VideoCapture: read() devolve (ok, frame) e release() encerra.
+    """
+
+    def __init__(self, largura, altura):
+        self.largura, self.altura = largura, altura
+        self.tamanho = largura * altura * 3 // 2  # bytes de um quadro YUV420
+        self.processo = subprocess.Popen(
+            ["rpicam-vid", "-t", "0", "-n", "--codec", "yuv420",
+             "--width", str(largura), "--height", str(altura),
+             "--framerate", "15", "-o", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+
+    def read(self):
+        dados = self.processo.stdout.read(self.tamanho)
+        if len(dados) < self.tamanho:
+            return False, None
+        yuv = np.frombuffer(dados, np.uint8).reshape(self.altura * 3 // 2, self.largura)
+        return True, cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
+
+    def release(self):
+        self.processo.terminate()
+        self.processo.wait()
 
 
 def baixar_modelo():
@@ -81,19 +113,24 @@ def main():
     # camera, o endereco do video do celular (app IP Webcam, DroidCam...)
     # ou "csi" para a camera ligada no conector de camera do Raspberry Pi.
     fonte = sys.argv[1] if len(sys.argv) > 1 else "0"
-    usar_csi = fonte.lower() == "csi"
+    usar_csi = False  # True quando a camera e a Picamera2
 
-    if usar_csi:
-        # So importa aqui para o projeto continuar rodando sem a Picamera2
-        from picamera2 import Picamera2
-
-        camera = Picamera2()
-        # RGB888 entrega os bytes na ordem BGR, a mesma que o OpenCV usa
-        config = camera.create_preview_configuration(
-            main={"size": (LARGURA_CAPTURA, ALTURA_CAPTURA), "format": "RGB888"}
-        )
-        camera.configure(config)
-        camera.start()
+    if fonte.lower() == "csi":
+        try:
+            # So importa aqui para o projeto continuar rodando sem a Picamera2
+            from picamera2 import Picamera2
+        except ImportError:
+            print("Picamera2 nao encontrada; usando o rpicam-vid para a camera CSI.")
+            camera = CameraRpicam(LARGURA_CAPTURA, ALTURA_CAPTURA)
+        else:
+            usar_csi = True
+            camera = Picamera2()
+            # RGB888 entrega os bytes na ordem BGR, a mesma que o OpenCV usa
+            config = camera.create_preview_configuration(
+                main={"size": (LARGURA_CAPTURA, ALTURA_CAPTURA), "format": "RGB888"}
+            )
+            camera.configure(config)
+            camera.start()
     else:
         if fonte.isdigit():
             fonte = int(fonte)
