@@ -9,6 +9,7 @@ o EAR (Eye Aspect Ratio), que e a razao entre a altura e a largura do olho:
 Uso:
     python olho_aberto_fechado.py                               # webcam do PC
     python olho_aberto_fechado.py http://192.168.0.10:8080/video  # celular
+    python3 olho_aberto_fechado.py csi                            # camera CSI do Raspberry Pi
 
 Pressione 'q' ou ESC para sair.
 """
@@ -41,6 +42,14 @@ OLHO_2 = [362, 385, 387, 263, 373, 380]
 # Se errar com voce, olhe o EAR mostrado na tela e ajuste.
 LIMIAR_EAR = 0.18
 
+# Resolucao da captura. 640x480 e suficiente e mais leve que HD.
+LARGURA_CAPTURA, ALTURA_CAPTURA = 640, 480
+
+# Largura da imagem enviada ao MediaPipe. Reduzir deixa mais rapido em
+# computadores fracos (como o Raspberry Pi 3). A tela continua em 640x480.
+# Se o rosto nao for detectado de longe, aumente (ou use 640 para nao reduzir).
+LARGURA_DETECCAO = 320
+
 
 def baixar_modelo():
     if not os.path.exists(MODELO):
@@ -69,31 +78,58 @@ def main():
     )
 
     # Sem argumento usa a webcam 0. Com argumento pode ser outro numero de
-    # camera ou o endereco do video do celular (app IP Webcam, DroidCam...).
+    # camera, o endereco do video do celular (app IP Webcam, DroidCam...)
+    # ou "csi" para a camera ligada no conector de camera do Raspberry Pi.
     fonte = sys.argv[1] if len(sys.argv) > 1 else "0"
-    if fonte.isdigit():
-        fonte = int(fonte)
+    usar_csi = fonte.lower() == "csi"
 
-    camera = cv2.VideoCapture(fonte)
-    if not camera.isOpened():
-        print(f"Nao foi possivel abrir a camera: {fonte}")
-        return
+    if usar_csi:
+        # So importa aqui para o projeto continuar rodando sem a Picamera2
+        from picamera2 import Picamera2
+
+        camera = Picamera2()
+        # RGB888 entrega os bytes na ordem BGR, a mesma que o OpenCV usa
+        config = camera.create_preview_configuration(
+            main={"size": (LARGURA_CAPTURA, ALTURA_CAPTURA), "format": "RGB888"}
+        )
+        camera.configure(config)
+        camera.start()
+    else:
+        if fonte.isdigit():
+            fonte = int(fonte)
+        camera = cv2.VideoCapture(fonte)
+        if not camera.isOpened():
+            print(f"Nao foi possivel abrir a camera: {fonte}")
+            return
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, LARGURA_CAPTURA)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, ALTURA_CAPTURA)
 
     with vision.FaceLandmarker.create_from_options(opcoes) as detector:
         inicio = time.monotonic()
         ultimo_ts = -1
 
         while True:
-            ok, frame = camera.read()
-            if not ok:
-                print("A camera parou de enviar imagens.")
-                break
+            if usar_csi:
+                frame = camera.capture_array()
+            else:
+                ok, frame = camera.read()
+                if not ok:
+                    print("A camera parou de enviar imagens.")
+                    break
 
             frame = cv2.flip(frame, 1)  # espelha a imagem, como um espelho
             altura, largura = frame.shape[:2]
 
+            # Detecta numa copia menor (mais rapido). Os pontos voltam
+            # normalizados (0 a 1), entao servem para a imagem original.
+            pequeno = frame
+            if largura > LARGURA_DETECCAO:
+                escala = LARGURA_DETECCAO / largura
+                pequeno = cv2.resize(frame, (LARGURA_DETECCAO, int(altura * escala)),
+                                     interpolation=cv2.INTER_AREA)
+
             # O MediaPipe espera RGB e um timestamp (ms) sempre crescente
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(pequeno, cv2.COLOR_BGR2RGB)
             imagem = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             ts = max(int((time.monotonic() - inicio) * 1000), ultimo_ts + 1)
             ultimo_ts = ts
@@ -128,7 +164,11 @@ def main():
             if tecla in (ord("q"), 27):  # 'q' ou ESC
                 break
 
-    camera.release()
+    if usar_csi:
+        camera.stop()
+        camera.close()
+    else:
+        camera.release()
     cv2.destroyAllWindows()
 
 
