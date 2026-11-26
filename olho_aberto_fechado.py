@@ -6,12 +6,16 @@ o EAR (Eye Aspect Ratio), que e a razao entre a altura e a largura do olho:
     olho aberto  -> EAR alto  (em torno de 0.25 a 0.35)
     olho fechado -> EAR baixo (abaixo de 0.20)
 
+No Raspberry Pi, um LED ligado no GPIO17 acende com os olhos abertos e apaga
+com os olhos fechados ou sem rosto na imagem (a ligacao esta em led.py).
+
 Uso:
     python olho_aberto_fechado.py                               # webcam do PC
     python olho_aberto_fechado.py http://192.168.0.10:8080/video  # celular
     python3 olho_aberto_fechado.py csi                            # camera CSI do Raspberry Pi
 
-Pressione 'q' ou ESC para sair.
+Pressione 'q' ou ESC para sair. Sem tela (por SSH, por exemplo) roda sem a
+janela, mostrando o estado so no LED e no terminal; nesse caso saia com Ctrl+C.
 """
 import os
 import subprocess
@@ -24,6 +28,8 @@ import mediapipe as mp
 import numpy as np
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision
+
+from led import criar_led
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 MODELO = os.path.join(PASTA, "face_landmarker.task")
@@ -100,6 +106,13 @@ def calcular_ear(pontos):
     return altura / (2.0 * largura)
 
 
+def tem_tela():
+    """No Linux so da para abrir a janela numa sessao grafica (nao por SSH)."""
+    if not sys.platform.startswith("linux"):
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 def main():
     baixar_modelo()
 
@@ -141,72 +154,101 @@ def main():
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, LARGURA_CAPTURA)
         camera.set(cv2.CAP_PROP_FRAME_HEIGHT, ALTURA_CAPTURA)
 
-    with vision.FaceLandmarker.create_from_options(opcoes) as detector:
-        inicio = time.monotonic()
-        ultimo_ts = -1
+    mostrar = tem_tela()
+    if not mostrar:
+        print("Sem tela: rodando sem a janela. Use Ctrl+C para sair.")
 
-        while True:
-            if usar_csi:
-                frame = camera.capture_array()
-            else:
-                ok, frame = camera.read()
-                if not ok:
-                    print("A camera parou de enviar imagens.")
-                    break
+    led = criar_led()
+    estado_anterior = None
 
-            frame = cv2.flip(frame, 1)  # espelha a imagem, como um espelho
-            altura, largura = frame.shape[:2]
+    try:
+        with vision.FaceLandmarker.create_from_options(opcoes) as detector:
+            inicio = time.monotonic()
+            ultimo_ts = -1
 
-            # Detecta numa copia menor (mais rapido). Os pontos voltam
-            # normalizados (0 a 1), entao servem para a imagem original.
-            pequeno = frame
-            if largura > LARGURA_DETECCAO:
-                escala = LARGURA_DETECCAO / largura
-                pequeno = cv2.resize(frame, (LARGURA_DETECCAO, int(altura * escala)),
-                                     interpolation=cv2.INTER_AREA)
-
-            # O MediaPipe espera RGB e um timestamp (ms) sempre crescente
-            rgb = cv2.cvtColor(pequeno, cv2.COLOR_BGR2RGB)
-            imagem = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            ts = max(int((time.monotonic() - inicio) * 1000), ultimo_ts + 1)
-            ultimo_ts = ts
-            resultado = detector.detect_for_video(imagem, ts)
-
-            if resultado.face_landmarks:
-                rosto = resultado.face_landmarks[0]
-                ears = []
-
-                for indices in (OLHO_1, OLHO_2):
-                    # Os pontos vem normalizados (0 a 1); converte para pixels
-                    pontos = [(rosto[i].x * largura, rosto[i].y * altura) for i in indices]
-                    ears.append(calcular_ear(pontos))
-                    for x, y in pontos:
-                        cv2.circle(frame, (int(x), int(y)), 2, (0, 255, 255), -1)
-
-                ear = sum(ears) / len(ears)
-                if ear < LIMIAR_EAR:
-                    texto, cor = "OLHOS FECHADOS", (0, 0, 255)
+            while True:
+                if usar_csi:
+                    frame = camera.capture_array()
                 else:
-                    texto, cor = "OLHOS ABERTOS", (0, 200, 0)
+                    ok, frame = camera.read()
+                    if not ok:
+                        print("A camera parou de enviar imagens.")
+                        break
 
-                cv2.putText(frame, texto, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, cor, 3)
-                cv2.putText(frame, f"EAR: {ear:.2f}", (20, 90),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            else:
-                cv2.putText(frame, "Nenhum rosto detectado", (20, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 2)
+                frame = cv2.flip(frame, 1)  # espelha a imagem, como um espelho
+                altura, largura = frame.shape[:2]
 
-            cv2.imshow("Olhos abertos ou fechados", frame)
-            tecla = cv2.waitKey(1) & 0xFF
-            if tecla in (ord("q"), 27):  # 'q' ou ESC
-                break
+                # Detecta numa copia menor (mais rapido). Os pontos voltam
+                # normalizados (0 a 1), entao servem para a imagem original.
+                pequeno = frame
+                if largura > LARGURA_DETECCAO:
+                    escala = LARGURA_DETECCAO / largura
+                    pequeno = cv2.resize(frame, (LARGURA_DETECCAO, int(altura * escala)),
+                                         interpolation=cv2.INTER_AREA)
 
-    if usar_csi:
-        camera.stop()
-        camera.close()
-    else:
-        camera.release()
-    cv2.destroyAllWindows()
+                # O MediaPipe espera RGB e um timestamp (ms) sempre crescente
+                rgb = cv2.cvtColor(pequeno, cv2.COLOR_BGR2RGB)
+                imagem = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                ts = max(int((time.monotonic() - inicio) * 1000), ultimo_ts + 1)
+                ultimo_ts = ts
+                resultado = detector.detect_for_video(imagem, ts)
+
+                if resultado.face_landmarks:
+                    rosto = resultado.face_landmarks[0]
+                    ears = []
+
+                    for indices in (OLHO_1, OLHO_2):
+                        # Os pontos vem normalizados (0 a 1); converte para pixels
+                        pontos = [(rosto[i].x * largura, rosto[i].y * altura) for i in indices]
+                        ears.append(calcular_ear(pontos))
+                        for x, y in pontos:
+                            cv2.circle(frame, (int(x), int(y)), 2, (0, 255, 255), -1)
+
+                    ear = sum(ears) / len(ears)
+                    if ear < LIMIAR_EAR:
+                        estado, cor = "OLHOS FECHADOS", (0, 0, 255)
+                    else:
+                        estado, cor = "OLHOS ABERTOS", (0, 200, 0)
+
+                    cv2.putText(frame, estado, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, cor, 3)
+                    cv2.putText(frame, f"EAR: {ear:.2f}", (20, 90),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                else:
+                    estado = "Nenhum rosto detectado"
+                    cv2.putText(frame, estado, (20, 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 2)
+
+                # O LED so acende com os olhos abertos. So mexe nele (e escreve
+                # no terminal) quando o estado muda, nao a cada quadro.
+                if estado != estado_anterior:
+                    estado_anterior = estado
+                    aceso = estado == "OLHOS ABERTOS"
+                    print(f"{estado} -> LED {'aceso' if aceso else 'apagado'}")
+                    if led is not None:
+                        if aceso:
+                            led.on()
+                        else:
+                            led.off()
+
+                if mostrar:
+                    cv2.imshow("Olhos abertos ou fechados", frame)
+                    tecla = cv2.waitKey(1) & 0xFF
+                    if tecla in (ord("q"), 27):  # 'q' ou ESC
+                        break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Apaga o LED e libera o pino e a camera, mesmo saindo com Ctrl+C ou erro
+        if led is not None:
+            led.off()
+            led.close()
+        if usar_csi:
+            camera.stop()
+            camera.close()
+        else:
+            camera.release()
+        if mostrar:
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
