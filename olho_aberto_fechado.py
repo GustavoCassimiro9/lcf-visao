@@ -6,8 +6,9 @@ o EAR (Eye Aspect Ratio), que e a razao entre a altura e a largura do olho:
     olho aberto  -> EAR alto  (em torno de 0.25 a 0.35)
     olho fechado -> EAR baixo (abaixo de 0.20)
 
-No Raspberry Pi, um LED ligado no GPIO17 acende com os olhos abertos e apaga
-com os olhos fechados ou sem rosto na imagem (a ligacao esta em led.py).
+No Raspberry Pi, um LED ligado no GPIO17 acende depois de 5 s com os olhos
+abertos e apaga depois de 10 s com os olhos fechados ou sem rosto na imagem
+(a ligacao e os tempos estao em led.py).
 
 Uso:
     python olho_aberto_fechado.py                               # webcam do PC
@@ -17,6 +18,7 @@ Uso:
 Pressione 'q' ou ESC para sair. Sem tela (por SSH, por exemplo) roda sem a
 janela, mostrando o estado so no LED e no terminal; nesse caso saia com Ctrl+C.
 """
+import math
 import os
 import subprocess
 import sys
@@ -29,7 +31,7 @@ import numpy as np
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision
 
-from led import criar_led
+from led import ControleLed, criar_led
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 MODELO = os.path.join(PASTA, "face_landmarker.task")
@@ -159,6 +161,7 @@ def main():
         print("Sem tela: rodando sem a janela. Use Ctrl+C para sair.")
 
     led = criar_led()
+    controle = ControleLed(led)
     estado_anterior = None
 
     try:
@@ -218,17 +221,24 @@ def main():
                     cv2.putText(frame, estado, (20, 50),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 2)
 
-                # O LED so acende com os olhos abertos. So mexe nele (e escreve
-                # no terminal) quando o estado muda, nao a cada quadro.
+                # Escreve no terminal so quando o estado dos olhos muda
                 if estado != estado_anterior:
                     estado_anterior = estado
-                    aceso = estado == "OLHOS ABERTOS"
-                    print(f"{estado} -> LED {'aceso' if aceso else 'apagado'}")
-                    if led is not None:
-                        if aceso:
-                            led.on()
-                        else:
-                            led.off()
+                    print(estado)
+
+                # O LED acende depois de 5 s de olhos abertos e apaga depois de
+                # 10 s de olhos fechados ou sem rosto (tempos em led.py)
+                agora = time.monotonic()
+                if controle.atualizar(estado == "OLHOS ABERTOS", agora):
+                    print(f"LED {'ACESO' if controle.aceso else 'APAGADO'}")
+
+                texto_led = f"LED {'aceso' if controle.aceso else 'apagado'}"
+                falta = controle.faltam(agora)
+                if falta is not None:
+                    acao = "apaga" if controle.aceso else "acende"
+                    texto_led += f" ({acao} em {math.ceil(falta)}s)"
+                cv2.putText(frame, texto_led, (20, 130),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
                 if mostrar:
                     cv2.imshow("Olhos abertos ou fechados", frame)

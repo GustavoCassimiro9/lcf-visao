@@ -114,7 +114,7 @@ echo "Testando a camera:"
 rpicam-hello --list-cameras || true
 
 echo
-echo "Pronto! Para rodar (o LED acende com os olhos abertos):"
+echo "Pronto! Para rodar (o LED acende apos 5 s de olhos abertos e apaga apos 10 s fechados):"
 echo "    ~/lcf-visao/rodar_pi.sh              # detector (na area de trabalho abre a janela;"
 echo "                                         #  por SSH roda sem janela, saia com Ctrl+C)"
 echo "    ~/lcf-visao/rodar_pi.sh testar-led   # so pisca o LED para conferir a ligacao"

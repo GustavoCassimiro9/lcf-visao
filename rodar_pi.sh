@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Roda o detector com a camera CSI do Raspberry Pi; o LED acende com os olhos abertos.
+# Roda o detector com a camera CSI do Raspberry Pi. O LED acende depois de 5 s
+# com os olhos abertos e apaga depois de 10 s com os olhos fechados.
 #   ./rodar_pi.sh              roda o detector
 #   ./rodar_pi.sh testar-led   so pisca o LED 5 vezes, para conferir a ligacao
 # Para usar outro pino no LED: LED_GPIO=27 ./rodar_pi.sh
